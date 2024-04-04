@@ -10,8 +10,30 @@ from plexapi.myplex import MyPlexAccount
 from plexapi.exceptions import Unauthorized
 from plexapi.server import PlexServer
 import threading
+import sqlite3
+import hashlib
 
 BITRATE_MINIMUM = 1000
+
+# Create a SQLite database if it doesn't exist
+if not os.path.exists('database.db'):
+    # Open the database connection
+    conn = sqlite3.connect('database.db')
+
+    # Create a cursor object
+    cursor = conn.cursor()
+
+    # Create the file_hashes table if it doesn't exist
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS file_hashes (
+            hash TEXT PRIMARY KEY,
+            filename TEXT
+        )
+    ''')
+
+    # Commit the changes and close the connection
+    conn.commit()
+    conn.close()
 
 def get_libraries():
     global plex_api
@@ -52,6 +74,7 @@ def start_scan():
     total_scan_seconds = 0
     remaining_seconds = per_item_scan_seconds * library_total_item_count
     remaining_time = time.strftime('%H:%M:%S', time.gmtime(remaining_seconds))
+    save_settings()
     update_progress()
     if not scanning:
         scanning = True
@@ -74,6 +97,9 @@ def scan_library_meta(plex, library_name):
     global library_total_item_count
     global scanning
     global writer
+    load_settings()
+    conn = sqlite3.connect('database.db')
+    
     # Create a variable for the CSV file
     csv_file = 'results.csv'
 
@@ -93,6 +119,7 @@ def scan_library_meta(plex, library_name):
     for item in library.all():
         # Check if scanning should be aborted
         if not scanning:
+            conn.close()
             writer.close()
             break
         # Skip items that are not movies or shows
@@ -107,16 +134,21 @@ def scan_library_meta(plex, library_name):
         problems = []
         # Check if the item has detected credits
         if not item.hasCreditsMarker and check_credits.get():
-            if item.enableCreditsMarkerGeneration == 0:
-                item.enableCreditsMarkerGeneration = 1
-            else:
-                problems.append("No credits detected")
+            problems.append("No credits detected")
         # Check if the item has a valid bitrate
         bitrate = item.media[0].bitrate
         if bitrate <= BITRATE_MINIMUM and validate_bitrate.get():
             problems.append("Invalid bitrate")
-        if check_corrupt_video:
-            corrupt = check_corrupt_video(item.media[0].parts[0].file)
+        corrupt = False
+        if check_encoding_errors.get():
+            checksum = hashlib.md5(item.media[0].parts[0].file.encode()).hexdigest()
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM file_hashes WHERE hash = ?', (checksum,))
+            if cursor.fetchone() is None:
+                corrupt = check_corrupt_video(item.media[0].parts[0].file)
+                if not corrupt:
+                    cursor.execute('INSERT INTO file_hashes (hash, filename) VALUES (?, ?)', (checksum, item.media[0].parts[0].file))
+                    conn.commit()
         if corrupt:
             problems.append("Corrupt video file detected")
         if problems:
@@ -129,6 +161,7 @@ def scan_library_meta(plex, library_name):
     library_items_scanned = library_total_item_count
     update_progress()
     writer.close()
+    conn.close()
 
  
 # Status variables

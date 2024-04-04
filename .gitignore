@@ -2,7 +2,7 @@
 settings.yaml
 results.csv
 *.exe
-
+database.db
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
