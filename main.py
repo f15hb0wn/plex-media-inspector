@@ -15,25 +15,31 @@ import hashlib
 
 BITRATE_MINIMUM = 1000
 
-# Create a SQLite database if it doesn't exist
-if not os.path.exists('database.db'):
-    # Open the database connection
-    conn = sqlite3.connect('database.db')
+# Open the database connection
+conn = sqlite3.connect('database.db')
 
-    # Create a cursor object
-    cursor = conn.cursor()
+# Create a cursor object
+cursor = conn.cursor()
 
-    # Create the file_hashes table if it doesn't exist
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS file_hashes (
-            hash TEXT PRIMARY KEY,
-            filename TEXT
-        )
-    ''')
+# Create the file_hashes table if it doesn't exist
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS file_hashes (
+        hash TEXT PRIMARY KEY,
+        filename TEXT
+    )
+''')
 
-    # Commit the changes and close the connection
-    conn.commit()
-    conn.close()
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS media_resolutions (
+        filename TEXT PRIMARY KEY,
+        resolution INTEGER
+    )
+''')
+
+# Commit the changes and close the connection
+conn.commit()
+conn.close()
+
 
 def get_libraries():
     global plex_api
@@ -99,7 +105,7 @@ def scan_library_meta(plex, library_name):
     global writer
     load_settings()
     conn = sqlite3.connect('database.db')
-    
+    cursor = conn.cursor()    
     # Create a variable for the CSV file
     csv_file = 'results.csv'
 
@@ -111,6 +117,7 @@ def scan_library_meta(plex, library_name):
 
     # Get the library by name
     library = plex.library.section(library_name)
+    print(library)
 
     # Create an empty list to store content with issues
     problem_content = []
@@ -124,11 +131,27 @@ def scan_library_meta(plex, library_name):
             break
         # Skip items that are not movies or shows
         if item.type not in ['movie', 'show']:
+            total_scan_seconds = time.time() - start_time
             library_items_scanned += 1
             update_progress()
             continue
         if not hasattr(item, 'hasCreditsMarker'):
             library_items_scanned += 1
+            total_scan_seconds = time.time() - start_time
+            update_progress()
+            continue
+        # Check if the file is marked as resolved in the database
+        cursor.execute('SELECT resolution FROM media_resolutions WHERE filename = ?', (item.media[0].parts[0].file,))
+        result = cursor.fetchone()
+        if result is None:
+            resolution = 0
+            cursor.execute('INSERT INTO media_resolutions (filename, resolution) VALUES (?, ?)', (item.media[0].parts[0].file, resolution))
+            conn.commit()
+        else:
+            resolution = result[0]
+        if resolution == 1:
+            library_items_scanned += 1
+            total_scan_seconds = time.time() - start_time
             update_progress()
             continue
         problems = []
@@ -142,7 +165,6 @@ def scan_library_meta(plex, library_name):
         corrupt = False
         if check_encoding_errors.get():
             checksum = hashlib.md5(item.media[0].parts[0].file.encode()).hexdigest()
-            cursor = conn.cursor()
             cursor.execute('SELECT * FROM file_hashes WHERE hash = ?', (checksum,))
             if cursor.fetchone() is None:
                 corrupt = check_corrupt_video(item.media[0].parts[0].file)
@@ -151,14 +173,16 @@ def scan_library_meta(plex, library_name):
                     conn.commit()
         if corrupt:
             problems.append("Corrupt video file detected")
+        if no_ts.get() and item.media[0].parts[0].file.endswith('.ts'):
+            problems.append("File has .ts extension")
         if problems:
-            print("Problems found with " + item.title)
-            add_result(library_name, item.title, item.guid, item.media[0].parts[0].file, problems)
+             add_result(library_name, item.title, item.guid, item.media[0].parts[0].file, problems)
         library_items_scanned += 1
         total_scan_seconds = time.time() - start_time
         update_progress()
     # Return the list of content without credits
     library_items_scanned = library_total_item_count
+    total_scan_seconds = time.time() - start_time
     update_progress()
     writer.close()
     conn.close()
@@ -178,15 +202,17 @@ def add_result(library, title, plex_link, disk_link, problems):
     global writer
     # Determine the tag based on the number of existing children
     tag = "oddrow" if len(results_table.get_children()) % 2 == 0 else "evenrow"
-    # Insert the result with the determined tag
+    # Insert the result with the determined tag    
     results_table.insert('', 'end', values=(library, title, plex_link, disk_link, problems), tags=(tag))
     # Write the result to the CSV file
     writer.writerow([library, title, plex_link, disk_link, problems])
+
 
 # Create variables for settings options and set them to True
 check_credits = tk.BooleanVar(value=True)
 validate_bitrate = tk.BooleanVar(value=True)
 check_encoding_errors = tk.BooleanVar(value=True)
+no_ts = tk.BooleanVar(value=True)
 
 # Create variables for Plex settings
 plex_account_name = tk.StringVar()
@@ -231,6 +257,7 @@ def update_progress():
     global library_items_scanned
     global progress_label
     global progress
+    global total_scan_seconds
     if library_total_item_count > 0:
         progress_value = library_items_scanned / library_total_item_count
     else:
@@ -252,6 +279,7 @@ def save_settings():
         'plex_server': plex_server.get(),
         'check_credits': check_credits.get(),
         'validate_bitrate': validate_bitrate.get(),
+        'no_ts': no_ts.get(), # Added 'no_ts' to the settings dictionary    
         'check_encoding_errors': check_encoding_errors.get(),
     }
     with open('settings.yaml', 'w') as file:
@@ -268,6 +296,7 @@ def load_settings():
     plex_server.set(settings['plex_server'])
     check_credits.set(settings['check_credits'])
     validate_bitrate.set(settings['validate_bitrate'])
+    no_ts.set(settings['no_ts']) # Added 'no_ts' to the settings dictionary
     check_encoding_errors.set(settings['check_encoding_errors'])
 
 
@@ -379,6 +408,7 @@ menubar.add_cascade(label="Settings", menu=settings_menu)
 # Add settings options to the settings menu
 settings_menu.add_checkbutton(label="Check for Credits", onvalue=True, offvalue=False, variable=check_credits)
 settings_menu.add_checkbutton(label="Validate Bitrate", onvalue=True, offvalue=False, variable=validate_bitrate)
+settings_menu.add_checkbutton(label="Don't allow .ts files", onvalue=True, offvalue=False, variable=no_ts) # Added 'no_ts' to the settings menu
 settings_menu.add_checkbutton(label="Check for encoding errors (very slow)", onvalue=True, offvalue=False, variable=check_encoding_errors)
 
 def check_corrupt_video(filepath):
@@ -388,5 +418,7 @@ def check_corrupt_video(filepath):
         return False  # Video file is not corrupt
     except subprocess.CalledProcessError as e:
         return True  # Video file is corrupt
-    
+
+
+
 root.mainloop()
