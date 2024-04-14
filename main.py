@@ -60,7 +60,11 @@ frame.pack(fill=tk.BOTH, expand=1, padx=50, pady=50)
 def get_library_item_count():
     global plex_api
     library = plex_api.library
-    return len(library.all())
+    items = 0
+    for item in library.all():
+        if item.type in ['movie', 'show']:
+            items += 1
+    return items
 
 scanning = False
 scan_thread = None
@@ -107,10 +111,10 @@ def scan_library_meta(plex, library_name):
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()    
     # Create a variable for the CSV file
-    csv_file = 'results.csv'
+    csv_file = open('results.csv', 'w', newline='')
 
     # Create a writer object for the CSV file
-    writer = csv.writer(open(csv_file, 'w', newline=''))
+    writer = csv.writer(csv_file)
 
     # Write the header row to the CSV file
     writer.writerow(['Library', 'Title', 'Plex Link', 'Disk Link', 'Problems'])
@@ -127,7 +131,7 @@ def scan_library_meta(plex, library_name):
         # Check if scanning should be aborted
         if not scanning:
             conn.close()
-            writer.close()
+            csv_file.close()
             break
         # Skip items that are not movies or shows
         if item.type not in ['movie', 'show']:
@@ -184,7 +188,7 @@ def scan_library_meta(plex, library_name):
     library_items_scanned = library_total_item_count
     total_scan_seconds = time.time() - start_time
     update_progress()
-    writer.close()
+    csv_file.close()
     conn.close()
 
  
