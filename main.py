@@ -224,7 +224,7 @@ def scan_library_meta(plex, library_name):
                 for i in range(1, last_episode):
                     if i not in episodes[season_index]:
                         missing_episodes.append(str(i))
-                if missing_episodes:
+                if missing_episodes and check_missing_episodes.get():
                     show_problems.append(f"Missing episodes in season {season_number}: {', '.join(missing_episodes)}")
                     
             if show_problems:
