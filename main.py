@@ -68,6 +68,7 @@ def get_library_item_count():
 
 scanning = False
 scan_thread = None
+current_title = ""
 
 def start_scan():
     global library_total_item_count
@@ -107,6 +108,7 @@ def scan_library_meta(plex, library_name):
     global library_total_item_count
     global scanning
     global writer
+    global current_title
     load_settings()
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()    
@@ -121,13 +123,15 @@ def scan_library_meta(plex, library_name):
 
     # Get the library by name
     library = plex.library.section(library_name)
-    print(library)
 
     # Create an empty list to store content with issues
-    problem_content = []
     start_time = time.time()
     # Iterate over all items in the library
     for item in library.all():
+        # Wait 1 second before scanning the next item
+        time.sleep(1)
+        title = item.title
+        current_title = item.title
         # Check if scanning should be aborted
         if not scanning:
             conn.close()
@@ -139,51 +143,141 @@ def scan_library_meta(plex, library_name):
             library_items_scanned += 1
             update_progress()
             continue
-        if not hasattr(item, 'hasCreditsMarker'):
+        if item.type == 'show':
+            show_ts_problems = False
+            episodes = []
+            missing_credits = []
+            seasons = []
+            skip_show = False
+            #Check for missing episodes in a season
+            for episode in item.episodes():
+                season = episode.seasonNumber
+                if season not in seasons:
+                    seasons.append(season)
+                    episodes.append([])
+                    missing_credits.append([])
+                season_index = seasons.index(season)
+
+                title = f"{item.title} S{str(episode.seasonNumber).zfill(2)}:E{str(episode.index).zfill(2)} : {episode.title}"
+                episodes[season_index].append(episode.index)
+                current_title = title
+                update_progress()                
+                if not hasattr(episode, 'hasCreditsMarker'):
+                    total_scan_seconds = time.time() - start_time
+                    update_progress()
+                    continue
+                if ignore_ts.get() and episode.media[0].parts[0].file.endswith('.ts'):
+                    skip_show = True
+                    break
+                problems = []
+                # Check if the item has detected credits
+                if not episode.hasCreditsMarker and check_credits.get():
+                    missing_credits[season_index].append(str(episode.index))
+                # Check if the item has a valid bitrate
+                bitrate = episode.media[0].bitrate
+                if bitrate <= BITRATE_MINIMUM and validate_bitrate.get():
+                    problems.append("Invalid bitrate")
+                corrupt = False
+
+                if check_encoding_errors.get() and not skip_show:
+                    checksum = hashlib.md5(episode.media[0].parts[0].file.encode()).hexdigest()
+                    cursor.execute('SELECT * FROM file_hashes WHERE hash = ?', (checksum,))
+                    if cursor.fetchone() is None:
+                        corrupt = check_corrupt_video(episode.media[0].parts[0].file)
+                        if not corrupt:
+                            cursor.execute('INSERT INTO file_hashes (hash, filename) VALUES (?, ?)', (checksum, episode.media[0].parts[0].file))
+                            conn.commit()
+                if corrupt:
+                    problems.append("Corrupt video file detected")
+                if no_ts.get() and episode.media[0].parts[0].file.endswith('.ts'):
+                    show_ts_problems = True
+                if problems:
+                    add_result(library_name, title, episode.guid, episode.media[0].parts[0].file, problems)
+                total_scan_seconds = time.time() - start_time
             library_items_scanned += 1
-            total_scan_seconds = time.time() - start_time
+            # Check for show problems
+            show_problems = []
+            if show_ts_problems and not skip_show:
+                show_problems.append('Show has episodes with .ts extension')
+            # Evaluate each season
+            if skip_show:
+                continue
+            for season in seasons:
+                if season < 1:
+                    continue
+                season_index = seasons.index(season)
+                season_number = season
+                percent_credits = len(missing_credits[season_index]) / len(episodes[season_index])
+                if percent_credits < 1 and percent_credits >= 0.5:
+                    show_problems.append(f"Season {season_number} has missing credits for episodes {', '.join(missing_credits[season_index])}")
+                last_episode = 1
+                for episode in episodes[season_index]:
+                    if not episode:
+                        continue
+                    if episode > 30:
+                        break
+                    if episode > last_episode:
+                        last_episode = episode
+                if last_episode == 1:
+                    continue
+                missing_episodes = []
+                for i in range(1, last_episode):
+                    if i not in episodes[season_index]:
+                        missing_episodes.append(str(i))
+                if missing_episodes:
+                    show_problems.append(f"Missing episodes in season {season_number}: {', '.join(missing_episodes)}")
+                    
+            if show_problems:
+                add_result(library_name, item.title, item.guid, '', show_problems)
+            
             update_progress()
-            continue
-        # Check if the file is marked as resolved in the database
-        cursor.execute('SELECT resolution FROM media_resolutions WHERE filename = ?', (item.media[0].parts[0].file,))
-        result = cursor.fetchone()
-        if result is None:
-            resolution = 0
-            cursor.execute('INSERT INTO media_resolutions (filename, resolution) VALUES (?, ?)', (item.media[0].parts[0].file, resolution))
-            conn.commit()
         else:
-            resolution = result[0]
-        if resolution == 1:
+            update_progress()
+            if not hasattr(item, 'hasCreditsMarker'):
+                library_items_scanned += 1
+                total_scan_seconds = time.time() - start_time
+                update_progress()
+                continue
+            # Check if the file is marked as resolved in the database
+            cursor.execute('SELECT resolution FROM media_resolutions WHERE filename = ?', (item.media[0].parts[0].file,))
+            result = cursor.fetchone()
+            if result is None:
+                resolution = 0
+                cursor.execute('INSERT INTO media_resolutions (filename, resolution) VALUES (?, ?)', (item.media[0].parts[0].file, resolution))
+                conn.commit()
+            else:
+                resolution = result[0]
+            if resolution == 1:
+                library_items_scanned += 1
+                total_scan_seconds = time.time() - start_time
+                update_progress()
+                continue
+            problems = []
+            # Check if the item has detected credits
+            if not item.hasCreditsMarker and check_credits.get():
+                problems.append("No credits detected")
+            # Check if the item has a valid bitrate
+            bitrate = item.media[0].bitrate
+            if bitrate <= BITRATE_MINIMUM and validate_bitrate.get():
+                problems.append("Invalid bitrate")
+            corrupt = False
+            if check_encoding_errors.get():
+                checksum = hashlib.md5(item.media[0].parts[0].file.encode()).hexdigest()
+                cursor.execute('SELECT * FROM file_hashes WHERE hash = ?', (checksum,))
+                if cursor.fetchone() is None:
+                    corrupt = check_corrupt_video(item.media[0].parts[0].file)
+                    if not corrupt:
+                        cursor.execute('INSERT INTO file_hashes (hash, filename) VALUES (?, ?)', (checksum, item.media[0].parts[0].file))
+                        conn.commit()
+            if corrupt:
+                problems.append("Corrupt video file detected")
+            if no_ts.get() and item.media[0].parts[0].file.endswith('.ts'):
+                problems.append("File has .ts extension")
+            if problems:
+                add_result(library_name, title, item.guid, item.media[0].parts[0].file, problems)
             library_items_scanned += 1
             total_scan_seconds = time.time() - start_time
             update_progress()
-            continue
-        problems = []
-        # Check if the item has detected credits
-        if not item.hasCreditsMarker and check_credits.get():
-            problems.append("No credits detected")
-        # Check if the item has a valid bitrate
-        bitrate = item.media[0].bitrate
-        if bitrate <= BITRATE_MINIMUM and validate_bitrate.get():
-            problems.append("Invalid bitrate")
-        corrupt = False
-        if check_encoding_errors.get():
-            checksum = hashlib.md5(item.media[0].parts[0].file.encode()).hexdigest()
-            cursor.execute('SELECT * FROM file_hashes WHERE hash = ?', (checksum,))
-            if cursor.fetchone() is None:
-                corrupt = check_corrupt_video(item.media[0].parts[0].file)
-                if not corrupt:
-                    cursor.execute('INSERT INTO file_hashes (hash, filename) VALUES (?, ?)', (checksum, item.media[0].parts[0].file))
-                    conn.commit()
-        if corrupt:
-            problems.append("Corrupt video file detected")
-        if no_ts.get() and item.media[0].parts[0].file.endswith('.ts'):
-            problems.append("File has .ts extension")
-        if problems:
-             add_result(library_name, item.title, item.guid, item.media[0].parts[0].file, problems)
-        library_items_scanned += 1
-        total_scan_seconds = time.time() - start_time
-        update_progress()
     # Return the list of content without credits
     library_items_scanned = library_total_item_count
     total_scan_seconds = time.time() - start_time
@@ -217,6 +311,8 @@ check_credits = tk.BooleanVar(value=True)
 validate_bitrate = tk.BooleanVar(value=True)
 check_encoding_errors = tk.BooleanVar(value=True)
 no_ts = tk.BooleanVar(value=True)
+ignore_ts = tk.BooleanVar(value=False)
+check_missing_episodes = tk.BooleanVar(value=True)
 
 # Create variables for Plex settings
 plex_account_name = tk.StringVar()
@@ -262,6 +358,7 @@ def update_progress():
     global progress_label
     global progress
     global total_scan_seconds
+    global current_title
     if library_total_item_count > 0:
         progress_value = library_items_scanned / library_total_item_count
     else:
@@ -272,7 +369,7 @@ def update_progress():
         per_item_scan_seconds = 0
     remaining_seconds = per_item_scan_seconds * (library_total_item_count - library_items_scanned)
     remaining_time = time.strftime('%H:%M:%S', time.gmtime(remaining_seconds))
-    progress_label.config(text="Progress: " + str(library_items_scanned) + " / " + str(library_total_item_count) + " items scanned. Estimated time remaining: " + remaining_time + ". ")
+    progress_label.config(text="Progress: " + str(library_items_scanned) + " / " + str(library_total_item_count) + " items scanned. Estimated time remaining: " + remaining_time + ". \n" + current_title)
     progress['value'] = progress_value * 100
     root.update_idletasks()
 
@@ -283,7 +380,9 @@ def save_settings():
         'plex_server': plex_server.get(),
         'check_credits': check_credits.get(),
         'validate_bitrate': validate_bitrate.get(),
-        'no_ts': no_ts.get(), # Added 'no_ts' to the settings dictionary    
+        'no_ts': no_ts.get(), # Added 'no_ts' to the settings dictionary
+        'ignore_ts': ignore_ts.get(), # Added 'ignore_ts' to the settings dictionary
+        'check_missing_episodes': check_missing_episodes.get(), # Added 'check_missing_episodes' to the settings dictionary
         'check_encoding_errors': check_encoding_errors.get(),
     }
     with open('settings.yaml', 'w') as file:
@@ -301,6 +400,8 @@ def load_settings():
     check_credits.set(settings['check_credits'])
     validate_bitrate.set(settings['validate_bitrate'])
     no_ts.set(settings['no_ts']) # Added 'no_ts' to the settings dictionary
+    ignore_ts.set(settings['ignore_ts']) # Added 'ignore_ts' to the settings dictionary
+    check_missing_episodes.set(settings['check_missing_episodes']) # Added 'check_missing_episodes' to the settings dictionary
     check_encoding_errors.set(settings['check_encoding_errors'])
 
 
@@ -340,7 +441,7 @@ test_connection_button = tk.Button(frame, text="Plex Login", command=plex_login)
 test_connection_button.pack(pady=10)
 
 # Create a label for the progress
-progress_label = tk.Label(frame, text="Progress: 0 / 0")
+progress_label = tk.Label(frame, text="Progress: 0 / 0 \n ")
 progress_label.pack(pady=5)
 
 # Add the progress bar, start button, and menu bar below the new widgets
@@ -412,7 +513,9 @@ menubar.add_cascade(label="Settings", menu=settings_menu)
 # Add settings options to the settings menu
 settings_menu.add_checkbutton(label="Check for Credits", onvalue=True, offvalue=False, variable=check_credits)
 settings_menu.add_checkbutton(label="Validate Bitrate", onvalue=True, offvalue=False, variable=validate_bitrate)
+settings_menu.add_checkbutton(label="Check for missing episodes", onvalue=True, offvalue=False, variable=check_missing_episodes) # Added 'check_missing_episodes' to the settings menu
 settings_menu.add_checkbutton(label="Don't allow .ts files", onvalue=True, offvalue=False, variable=no_ts) # Added 'no_ts' to the settings menu
+settings_menu.add_checkbutton(label="Ignore .ts files", onvalue=True, offvalue=False, variable=ignore_ts) # Added 'no_ts' to the settings menu
 settings_menu.add_checkbutton(label="Check for encoding errors (very slow)", onvalue=True, offvalue=False, variable=check_encoding_errors)
 
 def check_corrupt_video(filepath):
