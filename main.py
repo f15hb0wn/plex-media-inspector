@@ -148,6 +148,7 @@ def scan_library_meta(plex, library_name):
             episodes = []
             missing_credits = []
             seasons = []
+            double_episodes = []
             skip_show = False
             #Check for missing episodes in a season
             for episode in item.episodes():
@@ -157,7 +158,10 @@ def scan_library_meta(plex, library_name):
                     episodes.append([])
                     missing_credits.append([])
                 season_index = seasons.index(season)
-
+                duration = episode.media[0].duration
+                double_length = 60 * 52
+                if duration > double_length:
+                    double_episodes.append(episode.index + 1)
                 title = f"{item.title} S{str(episode.seasonNumber).zfill(2)}:E{str(episode.index).zfill(2)} : {episode.title}"
                 episodes[season_index].append(episode.index)
                 current_title = title
@@ -174,8 +178,9 @@ def scan_library_meta(plex, library_name):
                 if not episode.hasCreditsMarker and check_credits.get():
                     missing_credits[season_index].append(str(episode.index))
                 # Check if the item has a valid bitrate
+                # Check if the item has a valid bitrate
                 bitrate = episode.media[0].bitrate
-                if bitrate <= BITRATE_MINIMUM and validate_bitrate.get():
+                if bitrate is not None and bitrate <= BITRATE_MINIMUM and validate_bitrate.get():
                     problems.append("Invalid bitrate")
                 corrupt = False
 
@@ -222,7 +227,7 @@ def scan_library_meta(plex, library_name):
                     continue
                 missing_episodes = []
                 for i in range(1, last_episode):
-                    if i not in episodes[season_index]:
+                    if i not in episodes[season_index] and i not in double_episodes:
                         missing_episodes.append(str(i))
                 if missing_episodes and check_missing_episodes.get():
                     show_problems.append(f"Missing episodes in season {season_number}: {', '.join(missing_episodes)}")
