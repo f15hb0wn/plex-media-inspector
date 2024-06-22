@@ -57,9 +57,9 @@ root.geometry(str(window_width) + "x" + str(window_height))
 frame = tk.Frame(root)
 frame.pack(fill=tk.BOTH, expand=1, padx=50, pady=50)
 
-def get_library_item_count():
+def get_library_item_count(library_name):
     global plex_api
-    library = plex_api.library
+    library = plex_api.library.section(library_name)
     items = 0
     for item in library.all():
         if item.type in ['movie', 'show']:
@@ -91,7 +91,7 @@ def start_scan():
         scanning = True
         library_menu.config(state="disabled")
         start_button.config(text="Abort Scan")
-        library_total_item_count = get_library_item_count()
+        library_total_item_count = get_library_item_count(selected_library.get())
         update_progress()
         scan_thread = threading.Thread(target=scan_library_meta, args=(plex_api, selected_library.get()))
         scan_thread.start()
