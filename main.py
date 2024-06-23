@@ -99,8 +99,7 @@ def start_scan():
         scanning = False
         library_menu.config(state="enabled")
         start_button.config(text="Start Scan")
-        if scan_thread is not None:
-            scan_thread.join()  # Wait for the thread to finish
+
     
 def scan_library_meta(plex, library_name):
     global library_items_scanned
@@ -109,6 +108,8 @@ def scan_library_meta(plex, library_name):
     global scanning
     global writer
     global current_title
+    global library_menu
+    global start_button
     load_settings()
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()    
@@ -153,15 +154,18 @@ def scan_library_meta(plex, library_name):
             #Check for missing episodes in a season
             for episode in item.episodes():
                 season = episode.seasonNumber
+                if not isinstance(episode.index, int):
+                    continue
                 if season not in seasons:
                     seasons.append(season)
                     episodes.append([])
+                    double_episodes.append([])
                     missing_credits.append([])
                 season_index = seasons.index(season)
                 duration = episode.media[0].duration
-                double_length = 60 * 52
+                double_length = 60 * 70
                 if duration > double_length:
-                    double_episodes.append(episode.index + 1)
+                    double_episodes[season_index].append(episode.index + 1)
                 title = f"{item.title} S{str(episode.seasonNumber).zfill(2)}:E{str(episode.index).zfill(2)} : {episode.title}"
                 episodes[season_index].append(episode.index)
                 current_title = title
@@ -227,7 +231,7 @@ def scan_library_meta(plex, library_name):
                     continue
                 missing_episodes = []
                 for i in range(1, last_episode):
-                    if i not in episodes[season_index] and i not in double_episodes:
+                    if i not in episodes[season_index] and i not in double_episodes[season_index]:
                         missing_episodes.append(str(i))
                 if missing_episodes and check_missing_episodes.get():
                     show_problems.append(f"Missing episodes in season {season_number}: {', '.join(missing_episodes)}")
@@ -289,6 +293,9 @@ def scan_library_meta(plex, library_name):
     update_progress()
     csv_file.close()
     conn.close()
+    library_menu.config(state="enabled")
+    start_button.config(text="Start Scan")
+
 
  
 # Status variables
@@ -364,6 +371,7 @@ def update_progress():
     global progress
     global total_scan_seconds
     global current_title
+    global scanning
     if library_total_item_count > 0:
         progress_value = library_items_scanned / library_total_item_count
     else:
@@ -376,6 +384,10 @@ def update_progress():
     remaining_time = time.strftime('%H:%M:%S', time.gmtime(remaining_seconds))
     progress_label.config(text="Progress: " + str(library_items_scanned) + " / " + str(library_total_item_count) + " items scanned. Estimated time remaining: " + remaining_time + ". \n" + current_title)
     progress['value'] = progress_value * 100
+    if progress_value == 1:
+        progress_label.config(text="Scan complete. " + str(library_items_scanned) + " items scanned. Total time: " + time.strftime('%H:%M:%S', time.gmtime(total_scan_seconds)))
+    if not scanning:
+        progress_label.config(text="Scan aborted. ")
     root.update_idletasks()
 
 def save_settings():
