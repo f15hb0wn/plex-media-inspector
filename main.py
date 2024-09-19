@@ -163,6 +163,8 @@ def scan_library_meta(plex, library_name):
                     missing_credits.append([])
                 season_index = seasons.index(season)
                 duration = episode.media[0].duration
+                if duration is None:
+                    duration = 0
                 double_length = 60 * 70
                 if duration > double_length:
                     double_episodes[season_index].append(episode.index + 1)
