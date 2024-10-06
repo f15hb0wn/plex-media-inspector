@@ -196,7 +196,10 @@ def scan_library_meta(plex, library_name):
                     if cursor.fetchone() is None:
                         corrupt = check_corrupt_video(episode.media[0].parts[0].file)
                         if not corrupt:
-                            cursor.execute('INSERT INTO file_hashes (hash, filename) VALUES (?, ?)', (checksum, episode.media[0].parts[0].file))
+                            try:
+                                cursor.execute('INSERT INTO file_hashes (hash, filename) VALUES (?, ?)', (checksum, episode.media[0].parts[0].file))
+                            except sqlite3.IntegrityError:
+                                continue
                             conn.commit()
                 if corrupt:
                     problems.append("Corrupt video file detected")
