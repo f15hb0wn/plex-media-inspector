@@ -213,6 +213,10 @@ def scan_library_meta(plex, library_name):
             show_problems = []
             if show_ts_problems and not skip_show:
                 show_problems.append('Show has episodes with .ts extension')
+            # Re-analyze all seasons
+            if reanalyze.get():
+                for season in item.seasons():
+                    season.analyze()
             # Evaluate each season
             if skip_show:
                 continue
@@ -221,6 +225,8 @@ def scan_library_meta(plex, library_name):
                     continue
                 season_index = seasons.index(season)
                 season_number = season
+                # Analyze the season
+
                 percent_credits = len(missing_credits[season_index]) / len(episodes[season_index])
                 if percent_credits < 1 and percent_credits >= 0.5:
                     show_problems.append(f"Season {season_number} has missing credits for episodes {', '.join(missing_credits[season_index])}")
@@ -270,6 +276,9 @@ def scan_library_meta(plex, library_name):
             # Check if the item has detected credits
             if not item.hasCreditsMarker and check_credits.get():
                 problems.append("No credits detected")
+            # Re-analyze the item
+            if reanalyze.get():
+                item.analyze()
             # Check if the item has a valid bitrate
             bitrate = item.media[0].bitrate
             if bitrate <= BITRATE_MINIMUM and validate_bitrate.get():
@@ -329,6 +338,7 @@ validate_bitrate = tk.BooleanVar(value=True)
 check_encoding_errors = tk.BooleanVar(value=True)
 no_ts = tk.BooleanVar(value=True)
 ignore_ts = tk.BooleanVar(value=False)
+reanalyze = tk.BooleanVar(value=False)
 check_missing_episodes = tk.BooleanVar(value=True)
 
 # Create variables for Plex settings
@@ -404,6 +414,7 @@ def save_settings():
         'validate_bitrate': validate_bitrate.get(),
         'no_ts': no_ts.get(), # Added 'no_ts' to the settings dictionary
         'ignore_ts': ignore_ts.get(), # Added 'ignore_ts' to the settings dictionary
+        'reanalyze': reanalyze.get(), # Added 'reanalyze' to the settings dictionary
         'check_missing_episodes': check_missing_episodes.get(), # Added 'check_missing_episodes' to the settings dictionary
         'check_encoding_errors': check_encoding_errors.get(),
     }
@@ -423,6 +434,7 @@ def load_settings():
     validate_bitrate.set(settings['validate_bitrate'])
     no_ts.set(settings['no_ts']) # Added 'no_ts' to the settings dictionary
     ignore_ts.set(settings['ignore_ts']) # Added 'ignore_ts' to the settings dictionary
+    reanalyze.set(settings['reanalyze']) # Added 'reanalyze' to the settings dictionary
     check_missing_episodes.set(settings['check_missing_episodes']) # Added 'check_missing_episodes' to the settings dictionary
     check_encoding_errors.set(settings['check_encoding_errors'])
 
@@ -538,6 +550,7 @@ settings_menu.add_checkbutton(label="Validate Bitrate", onvalue=True, offvalue=F
 settings_menu.add_checkbutton(label="Check for missing episodes", onvalue=True, offvalue=False, variable=check_missing_episodes) # Added 'check_missing_episodes' to the settings menu
 settings_menu.add_checkbutton(label="Don't allow .ts files", onvalue=True, offvalue=False, variable=no_ts) # Added 'no_ts' to the settings menu
 settings_menu.add_checkbutton(label="Ignore .ts files", onvalue=True, offvalue=False, variable=ignore_ts) # Added 'no_ts' to the settings menu
+settings_menu.add_checkbutton(label="Re-analyze content (resource intensive on server)", onvalue=True, offvalue=False, variable=reanalyze) # Added 'no_ts' to the settings menu
 settings_menu.add_checkbutton(label="Check for encoding errors (very slow)", onvalue=True, offvalue=False, variable=check_encoding_errors)
 
 def check_corrupt_video(filepath):
